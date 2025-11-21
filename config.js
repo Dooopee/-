@@ -5,3 +5,6 @@ export const TOKEN = process.env.TOKEN || '';
 export const CLIENT_ID = process.env.CLIENT_ID || '';
 export const GUILD_ID = process.env.GUILD_ID || '';
 export const PREFIX = process.env.PREFIX || '!';
+export const MOD_ROLE_ID = '123456789012345678'; // ID роли модераторов
+export const SUPPORT_CATEGORY_ID = '123456789012345678';
+export const LOG_CHANNEL_ID = '123456789012345678';
