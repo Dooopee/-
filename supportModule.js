@@ -1,27 +1,35 @@
-import { 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle, 
-  EmbedBuilder, 
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
   PermissionFlagsBits,
-  MessageFlags
+  ChannelType,
+  MessageFlags,
+  Colors
 } from 'discord.js';
-import { SUPPORT_CATEGORY_ID, LOG_CHANNEL_ID } from './config.js';
+import { SUPPORT_CATEGORY_ID, LOG_CHANNEL_ID, MOD_ROLE_ID } from './config.js'; // добавь MOD_ROLE_ID в config!
 
 const TICKET_PREFIX = 'ticket-';
 
 export function initSupportModule(client, supportChannelId) {
-
+  // Отправляем сообщение с кнопкой создания тикета (один раз)
   const sendSupportButton = async () => {
     try {
       const guild = client.guilds.cache.first();
       if (!guild) return;
 
-      const supportChannel = await guild.channels.fetch(supportChannelId).catch(() => null);
-      if (!supportChannel || !supportChannel.isTextBased()) return;
+      const channel = await guild.channels.fetch(supportChannelId).catch(() => null);
+      if (!channel?.isTextBased()) return;
+
+      // Проверяем, не отправлено ли уже
+      const messages = await channel.messages.fetch({ limit: 10 });
+      if (messages.some(m => m.author.id === client.user.id && m.embeds[0]?.title === 'Нужна помощь?')) {
+        return; // уже есть
+      }
 
       const embed = new EmbedBuilder()
-        .setTitle('💬 Нужна помощь?')
+        .setTitle('Нужна помощь?')
         .setDescription('Нажми кнопку ниже, чтобы создать тикет и связаться с модератором.')
         .setColor(0x3498db)
         .setTimestamp();
@@ -31,109 +39,134 @@ export function initSupportModule(client, supportChannelId) {
           .setCustomId('create_ticket')
           .setLabel('Связь с модератором')
           .setStyle(ButtonStyle.Primary)
+          .setEmoji('🎫')
       );
 
-      await supportChannel.send({ embeds: [embed], components: [row] });
+      await channel.send({ embeds: [embed], components: [row] });
     } catch (e) {
-      console.error('Failed to send support button', e);
+      console.error('Failed to send support button:', e);
     }
   };
 
-  sendSupportButton();
+  // Запускаем при старте бота
+  client.once('ready', () => {
+    console.log('Support module загружен');
+    sendSupportButton();
+  });
 
+  // Главный обработчик всех кнопок
   client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isButton()) return;
+
     try {
-      if (!interaction.isButton()) return;
-
-      // === КНОПКА СОЗДАНИЯ ТИКЕТА ===
+      // 1. Создание тикета
       if (interaction.customId === 'create_ticket') {
+        if (!interaction.guild) return;
+
         const user = interaction.user;
-        const guild = interaction.guild || client.guilds.cache.first();
-        if (!guild) return;
 
-        const category = guild.channels.cache.get(SUPPORT_CATEGORY_ID) || null;
-
-        const channel = await guild.channels.create({
-          name: `${TICKET_PREFIX}${user.username}`.toLowerCase().slice(0, 90),
-          type: 0,
-          parent: category ? category.id : undefined,
-          permissionOverwrites: [
-            { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-            { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
-          ]
-        });
-
-        const embed = new EmbedBuilder()
-          .setTitle('🎫 Тикет открыт')
-          .setDescription(`Привет, ${user}. Ожидай ответа модератора.`)
-          .setColor(0x9b59b6)
-          .setTimestamp();
-
-        const userRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('contact_mod')
-            .setLabel('Связь с модератором')
-            .setStyle(ButtonStyle.Primary)
+        // Проверка на уже существующий тикет
+        const existingChannel = interaction.guild.channels.cache.find(ch =>
+          ch.name === `${TICKET_PREFIX}${user.username.toLowerCase()}`
         );
-
-        const modRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('ticket_resolve')
-            .setLabel('Решено')
-            .setStyle(ButtonStyle.Success)
-            .setDisabled(true)
-        );
-
-        await channel.send({ 
-          content: `<@${user.id}>`, 
-          embeds: [embed], 
-          components: [userRow, modRow] 
-        });
-
-        if (LOG_CHANNEL_ID) {
-          const logCh = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-          if (logCh?.isTextBased()) logCh.send({ content: `Новый тикет: ${channel} от ${user.tag}` });
-        }
-
-        await interaction.reply({ 
-          content: `Тикет создан: ${channel}`, 
-          flags: MessageFlags.Ephemeral 
-        });
-      }
-
-      // === КНОПКА РЕШЕНО ===
-      if (interaction.customId === 'ticket_resolve') {
-        const isMod = interaction.member.roles.cache.some(r => r.name.toLowerCase().includes('mod')) ||
-                      interaction.member.permissions.has(PermissionFlagsBits.ManageGuild);
-
-        if (!isMod) {
-          return interaction.reply({ 
-            content: 'Только модераторы могут закрыть тикет.', 
-            flags: MessageFlags.Ephemeral 
+        if (existingChannel) {
+          return interaction.reply({
+            content: `У тебя уже есть тикет: ${existingChannel}`,
+            ephemeral: true
           });
         }
 
-        await interaction.deferUpdate();
-        await interaction.channel.delete(`Ticket resolved by ${interaction.user.tag}`).catch(() => null);
-      }
+        await interaction.deferReply({ ephemeral: true });
 
-      // === КНОПКА СВЯЗЬ С МОДЕРАТОРОМ ===
-      if (interaction.customId === 'contact_mod') {
-        await interaction.reply({ 
-          content: 'Модератор уведомлён, скоро свяжется с вами.', 
-          flags: MessageFlags.Ephemeral 
+        const channel = await interaction.guild.channels.create({
+          name: `${TICKET_PREFIX}${user.username.toLowerCase()}`,
+          type: ChannelType.GuildText,
+          parent: SUPPORT_CATEGORY_ID || null,
+          permissionOverwrites: [
+            { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+            { id: MOD_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] } // важно!
+          ]
         });
 
+        const welcomeEmbed = new EmbedBuilder()
+          .setTitle('Тикет открыт')
+          .setDescription(`Привет, ${user}! Скоро с тобой свяжется модератор.\nОпиши свою проблему подробно.`)
+          .setColor(Colors.Blurple)
+          .setTimestamp();
+
+        const buttons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('ticket_close')
+            .setLabel('Закрыть тикет')
+            .setStyle(ButtonStyle.Danger)
+            .setEmoji('🔒'),
+          new ButtonBuilder()
+            .setCustomId('ticket_alert')
+            .setLabel('Позвать модератора')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('🔔')
+        );
+
+        const msg = await channel.send({
+          content: `${user} | <@&${MOD_ROLE_ID}>`,
+          embeds: [welcomeEmbed],
+          components: [buttons]
+        });
+
+        await msg.pin();
+
+        // Лог
         if (LOG_CHANNEL_ID) {
-          const logCh = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-          if (logCh?.isTextBased()) logCh.send(`Пользователь ${interaction.user.tag} нажал "Связь с модератором"`);
+          const log = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+          if (log?.isTextBased()) {
+            log.send(`Новый тикет: ${channel} | От: ${user.tag} (${user.id})`);
+          }
         }
+
+        await interaction.editReply({
+          content: `Тикет создан: ${channel}`,
+          ephemeral: true
+        });
       }
 
-    } catch (e) {
-      console.error('Support module interaction error', e);
+      // 2. Кнопка "Позвать модератора"
+      if (interaction.customId === 'ticket_alert') {
+        if (!interaction.channel?.name.startsWith(TICKET_PREFIX)) return;
+
+        await interaction.reply({
+          content: 'Модераторы уведомлены! Ожидай ответа.',
+          ephemeral: true
+        });
+
+        await interaction.channel.send({
+          content: `<@&${MOD_ROLE_ID}> Пользователь просит внимания!`
+        });
+      }
+
+      // 3. Закрытие тикета
+      if (interaction.customId === 'ticket_close') {
+        if (!interaction.channel?.name.startsWith(TICKET_PREFIX)) return;
+
+        const member = interaction.member;
+        const hasPerms = member.roles.cache.has(MOD_ROLE_ID) ||
+                        member.permissions.has(PermissionFlagsBits.ManageChannels);
+
+        if (!hasPerms) {
+          return interaction.reply({ content: 'Только модераторы могут закрывать тикеты.', ephemeral: true });
+        }
+
+        await interaction.reply(`Тикет будет удалён через 5 секунд...`);
+        setTimeout(() => {
+          interaction.channel.delete(`Закрыт модератором ${interaction.user.tag}`).catch(() => {});
+        }, 5000);
+      }
+
+    } catch (error) {
+      console.error('Ошибка в support module:', error);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: 'Произошла ошибка.', ephemeral: true }).catch(() => {});
+      }
     }
   });
-
 }
-
