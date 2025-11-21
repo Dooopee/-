@@ -1,0 +1,7 @@
+export const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || '1436699596913901710';
+export const NEWS_CHANNEL_ID = process.env.NEWS_CHANNEL_ID || '1437400670637654056';
+export const SUPPORT_CATEGORY_ID = process.env.SUPPORT_CATEGORY_ID || ''; // category for tickets
+export const TOKEN = process.env.TOKEN || '';
+export const CLIENT_ID = process.env.CLIENT_ID || '';
+export const GUILD_ID = process.env.GUILD_ID || '';
+export const PREFIX = process.env.PREFIX || '!';
